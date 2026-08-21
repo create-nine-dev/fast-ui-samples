@@ -1,5 +1,11 @@
+/**
+ * Demo app: case management UI backed by the SAP Service Cloud APIs,
+ * rendered declaratively via fast-ui SmartPage configs (list view + detail view + create wizard).
+ */
 import { SmartPage, type SmartPageConfig, type SmartDialogValueHelpConfig, get, post, patch, extractRows } from "@create.nine/fast-ui";
 
+// Active case types are loaded once at startup and shared between the
+// table column.
 const caseTypeOptions = extractRows<any>(
   await get(
     "/sap/c4c/api/v1/case-type-service/caseTypes?$filter=templateStatus%20eq%20ACTIVE",
@@ -9,6 +15,8 @@ const caseTypeOptions = extractRows<any>(
   value: r.code,
 }));
 
+// Reusable picker dialog for assigning a customer (individual customer / business partner)
+// to a case. Used by both the table's value-help column and the create wizard.
 const customerValueHelp: SmartDialogValueHelpConfig = {
   keyField: "displayId",
   displayField: "formattedName",
@@ -123,6 +131,9 @@ const caseConfig: SmartPageConfig = {
           const res = await get<any>(
             `/sap/c4c/api/v1/case-service/cases/${id}`,
           );
+          // C4C OData responses vary in shape depending on the endpoint
+          // (plain array, { value: [...] }, or v2-style { d: { results: [...] } }),
+          // so normalize to a single case object before building the detail page.
           const c = Array.isArray(res)
             ? res[0]
             : Array.isArray(res?.value)
@@ -141,8 +152,10 @@ const caseConfig: SmartPageConfig = {
       variant: "modern",
       fields: ["displayId", "caseType", "individualCustomer.displayId"],
     },
-    onCellEdit: async (rowId, columnId, newValue, oldValue, row) => {
+    onCellEdit: async (_rowId, columnId, newValue, _oldValue, row) => {
       if (columnId !== "subject" && columnId !== "priority") return;
+      // Send the last-updated timestamp as If-Match so concurrent edits fail
+      // with a 412 instead of silently overwriting each other (optimistic locking).
       const updatedOn = row.adminData?.updatedOn;
       await patch(
         `/sap/c4c/api/v1/case-service/cases/${row.id}`,
@@ -231,6 +244,7 @@ const caseConfig: SmartPageConfig = {
               },
             ],
             onFinish: async (values) => {
+              // Shape the wizard values into the C4C case-service POST payload.
               const payload = {
                 caseType: values.caseType,
                 subject: values.subject,
@@ -256,6 +270,8 @@ const caseConfig: SmartPageConfig = {
   },
 };
 
+// Builds the case detail page (header + tabs with timeline and customer info)
+// from a single case object returned by fetchDetail.
 function buildCaseDetail(c: any): SmartPageConfig {
   const fmtDate = (iso?: string) =>
     iso ? new Date(iso).toLocaleString() : "-";
@@ -263,6 +279,8 @@ function buildCaseDetail(c: any): SmartPageConfig {
   const customer = c.individualCustomer;
   return {
     layout: "tabs",
+    // Object-page-style header: title/subtitle, a priority status pill,
+    // metadata + metric cards, and an escalation banner only when escalated.
     header: {
       showBack: true,
       avatarIcon: "briefcase",
@@ -290,6 +308,8 @@ function buildCaseDetail(c: any): SmartPageConfig {
         key: "generalInfo",
         title: "General Information",
         content: {
+          // Side-by-side panes: timeline on the left (60%), customer
+          // details on the right (40%). Each pane fetches its own data.
           type: "split",
           direction: "horizontal",
           sizes: [60, 40],
@@ -303,6 +323,8 @@ function buildCaseDetail(c: any): SmartPageConfig {
               },
               dataSource: {
                 fetcher: async () => {
+                  // Timeline events live in a shared service; filter to this case
+                  // via sourceObjectId + subscriberCode.
                   const json = await get<any>(
                     `/sap/c4c/api/v1/timeline-service/timelineEvents` +
                     `?$top=50&$skip=0&$filter=(sourceObjectId%20eq%20'${c.id}')` +
