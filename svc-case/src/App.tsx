@@ -1,4 +1,4 @@
-import { SmartPage, type SmartPageConfig, type SmartDialogValueHelpConfig, get, post, extractRows } from "@create.nine/fast-ui";
+import { SmartPage, type SmartPageConfig, type SmartDialogValueHelpConfig, get, post, patch, extractRows } from "@create.nine/fast-ui";
 
 const caseTypeOptions = extractRows<any>(
   await get(
@@ -59,8 +59,20 @@ const caseConfig: SmartPageConfig = {
     entity: [
       { key: "id", label: "ID" },
       { key: "displayId", label: "Display ID", filterOperator: "eq" },
-      { key: "subject", label: "Subject" },
-      { key: "priorityDescription", label: "Priority" },
+      { key: "subject", label: "Subject", editable: true },
+      // { key: "priorityDescription", label: "Priority" },
+      {
+        key: "priority",
+        label: "Priority",
+        type: "select",
+        editable: true,
+        options: [
+          { label: "Immediate", value: "01" },
+          { label: "Urgent", value: "02" },
+          { label: "Normal", value: "03" },
+          { label: "Low", value: "04" },
+        ],
+      },
       { key: "caseTypeDescription", label: "Case Type" },
       {
         key: "caseType",
@@ -96,7 +108,7 @@ const caseConfig: SmartPageConfig = {
         "individualCustomer.name",
         "caseTypeDescription",
         "statusDescription",
-        "priorityDescription",
+        "priority",
       ],
       toolbar: [
         {
@@ -106,6 +118,21 @@ const caseConfig: SmartPageConfig = {
           dialog: "createCaseDialog",
         },
       ],
+      navigation: {
+        fetchDetail: async (id) => {
+          const res = await get<any>(
+            `/sap/c4c/api/v1/case-service/cases/${id}`,
+          );
+          const c = Array.isArray(res)
+            ? res[0]
+            : Array.isArray(res?.value)
+              ? res.value[0]
+              : res?.value && typeof res.value === "object"
+                ? res.value
+                : (res?.d?.results?.[0] ?? res);
+          return buildCaseDetail(c);
+        },
+      },
       dataWorkbench: {
         columnPickerEnabled: true,
       },
@@ -113,6 +140,15 @@ const caseConfig: SmartPageConfig = {
     filterBar: {
       variant: "modern",
       fields: ["displayId", "caseType", "individualCustomer.displayId"],
+    },
+    onCellEdit: async (rowId, columnId, newValue, oldValue, row) => {
+      if (columnId !== "subject" && columnId !== "priority") return;
+      const updatedOn = row.adminData?.updatedOn;
+      await patch(
+        `/sap/c4c/api/v1/case-service/cases/${row.id}`,
+        { [columnId]: newValue },
+        { headers: { "If-Match": updatedOn } },
+      );
     },
     dialogs: {
       createCaseDialog: {
@@ -219,6 +255,115 @@ const caseConfig: SmartPageConfig = {
     },
   },
 };
+
+function buildCaseDetail(c: any): SmartPageConfig {
+  const fmtDate = (iso?: string) =>
+    iso ? new Date(iso).toLocaleString() : "-";
+
+  const customer = c.individualCustomer;
+  return {
+    layout: "tabs",
+    header: {
+      showBack: true,
+      avatarIcon: "briefcase",
+      title: c.subject || "Case",
+      subtitle: `${c.displayId} · ${c.caseTypeDescription || ""}`,
+      status: [{ label: c.priorityDescription || c.priority, color: "info" }],
+      metadata: [
+        { label: "Origin", value: c.originDescription || c.origin },
+        { label: "Reported On", value: fmtDate(c.timePoints?.reportedOn) },
+        { label: "Reported By", value: c.reporter?.name },
+      ],
+      metrics: [
+        { label: "Status", value: c.statusDescription, icon: "info" },
+        { label: "Customer", value: customer?.name, icon: "user" },
+        { label: "Processor", value: c.processor?.name, icon: "user" },
+      ],
+
+      alerts:
+        c.escalationStatus === "ESCALATED"
+          ? [{ label: "This Case Has Been Escalated", color: "error" }]
+          : undefined,
+    },
+    sections: [
+      {
+        key: "generalInfo",
+        title: "General Information",
+        content: {
+          type: "split",
+          direction: "horizontal",
+          sizes: [60, 40],
+          items: [
+            {
+              type: "list",
+              list: {
+                title: "Case Timeline",
+                variant: "timeline",
+                items: [],
+              },
+              dataSource: {
+                fetcher: async () => {
+                  const json = await get<any>(
+                    `/sap/c4c/api/v1/timeline-service/timelineEvents` +
+                    `?$top=50&$skip=0&$filter=(sourceObjectId%20eq%20'${c.id}')` +
+                    `&subscriberCode=CASE`,
+                  );
+                  return extractRows<any>(json).map((e) => ({
+                    key: e.id,
+                    date: fmtDate(e.timestamp),
+                    title: e.subject?.content || "",
+                    description: e.description?.content || "",
+                    status: "success",
+                    fields: [],
+                  }));
+                },
+              },
+            },
+            {
+              type: "list",
+              list: { title: "Customer Details", items: [] },
+              dataSource: {
+                fetcher: async () => {
+                  const json = await get<any>(
+                    `/sap/c4c/api/v1/individual-customer-service/individualCustomers/${c.individualCustomer.id}` +
+                    `?$select=formattedName,displayId,birthDate,defaultAddress,defaultCommunication`,
+                  );
+                  const cust =
+                    json?.responses?.[0]?.value ?? json?.value ?? json ?? {};
+                  const addr = cust.defaultAddress ?? {};
+                  const comm = cust.defaultCommunication ?? {};
+                  return [
+                    {
+                      key: "cust-details",
+                      fields: [
+                        { label: "Name", value: cust.formattedName ?? "" },
+                        { label: "Customer ID", value: cust.displayId ?? "" },
+                        {
+                          label: "Address",
+                          value: addr.formattedPostalAddressDescription ?? "",
+                        },
+                        {
+                          label: "BirthDate",
+                          value: cust.birthDate ?? "",
+                        },
+                        {
+                          label: "Mobile",
+                          value: comm.mobileFormattedNumber ?? "",
+                        },
+                      ],
+                    },
+                  ];
+                },
+              },
+            },
+          ],
+        },
+      },
+    ],
+
+  };
+
+}
 
 export default function App() {
   return <SmartPage config={caseConfig} />;
