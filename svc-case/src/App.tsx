@@ -276,6 +276,11 @@ function buildCaseDetail(c: any): SmartPageConfig {
   const fmtDate = (iso?: string) =>
     iso ? new Date(iso).toLocaleString() : "-";
 
+  // Extract external IDs for related entities so we can batch-fetch them
+  // in a single request per entity type below.
+  const caIds = c.contractAccounts?.map((ca: any) => ca.externalId) || [];
+  const premiseIds = c.premises?.map((p: any) => p.externalId) || [];
+
   const customer = c.individualCustomer;
   return {
     layout: "tabs",
@@ -302,6 +307,52 @@ function buildCaseDetail(c: any): SmartPageConfig {
         c.escalationStatus === "ESCALATED"
           ? [{ label: "This Case Has Been Escalated", color: "error" }]
           : undefined,
+
+      // Header actions for escalating / de-escalating the case.
+      // Both use optimistic locking and refresh the detail page on success.
+      actions: [
+        {
+          // Disabled when already escalated to prevent duplicate actions.
+          key: "escalate", label: "Escalate", icon: "alert-triangle", disabled: c.escalationStatus === "ESCALATED" ? true : false,
+          confirm: {
+            title: "Escalate Case",
+            description: "Are you sure you want to escalate this case?",
+            variant: "destructive",
+            confirmLabel: "Escalate",
+            cancelLabel: "Cancel"
+          },
+          refresh: true,
+          message: { success: "Case Escalate Successfully", error: "Failed to Escalate Case" },
+          onClick: async () => {
+            const updatedOn = c.adminData?.updatedOn;
+            await patch(
+              `/sap/c4c/api/v1/case-service/cases/${c.id}`,
+              { escalationStatus: "ESCALATED" },
+              { headers: { "If-Match": updatedOn } },
+            );
+          }
+        },
+        {
+          // Only enabled when the case is currently escalated.
+          key: "deEscalate", label: "De-Escalate", disabled: c.escalationStatus !== "ESCALATED" ? true : false,
+          confirm: {
+            title: "De-Escalate Case",
+            description: "Are you sure you want to De-Escalate this case?",
+            confirmLabel: "De-Escalate",
+            cancelLabel: "Cancel"
+          },
+          refresh: true,
+          message: { success: "Case De-Escalated Successfully", error: "Failed to De-Escalate Case" },
+          onClick: async () => {
+            const updatedOn = c.adminData?.updatedOn;
+            await patch(
+              `/sap/c4c/api/v1/case-service/cases/${c.id}`,
+              { escalationStatus: "NOT_ESCALATED" },
+              { headers: { "If-Match": updatedOn } },
+            );
+          }
+        },
+      ]
     },
     sections: [
       {
@@ -380,6 +431,118 @@ function buildCaseDetail(c: any): SmartPageConfig {
             },
           ],
         },
+      },
+
+      {
+        // Related entities: contract accounts and premises associated with
+        // the case, displayed as card-layout tables in a vertical split.
+        key: "relatedEntities",
+        title: "Related Entities",
+        content: {
+          type: "split",
+          direction: "vertical",
+          sizes: ["50%", "50%"],
+          items: [
+            {
+              type: "table",
+              table: {
+                entity: [
+                  { key: "id" },
+                  { key: "externalReferenceId", label: "External Id" },
+                  { key: "accountDeterminationIdDescription", label: "Account Determination" },
+                  { key: "customerInfo.name", label: "Customer" },
+                ],
+                dataSource: {
+                  // Batch-fetch contract accounts whose external IDs match
+                  // the case's linked contract account references.
+                  fetcher: async () => {
+                    if (caIds.length === 0) return [];
+                    const filter = caIds
+                      .map((id: string) => `externalReferenceId eq '${id}'`)
+                      .join(" or ");
+                    const url = `/sap/c4c/api/v1/contract-account-service/contractAccount?$filter=${encodeURIComponent(filter)}`;
+                    const res = await fetch(url);
+                    const data = await res.json();
+                    return data.value || [];
+                  },
+                },
+                table: {
+                  display: {
+                    title: "Contract Accounts",
+                    cardLayout: {
+                      enabled: true,
+                      columns: 3,
+                    },
+                  },
+                  columns: ["externalReferenceId", "accountDeterminationIdDescription", "customerInfo.name"],
+                  dataWorkbench: {
+                    refreshEnabled: false,
+                    exportEnabled: false,
+                  },
+                  pagination: {
+                    enabled: false,
+                  },
+                },
+                filterBar: {
+                  hideFilterBar: true,
+                },
+              },
+            },
+            {
+              type: "table",
+              table: {
+                entity: [
+                  { key: "id" },
+                  { key: "externalReferenceId", label: "External Id" },
+                  { key: "formattedAddress", label: "Address" },
+                ],
+                dataSource: {
+                  // Batch-fetch premises using the same OData $filter pattern
+                  // as contract accounts above.
+                  fetcher: async () => {
+                    if (premiseIds.length === 0) return [];
+                    const filter = premiseIds
+                      .map((id: string) => `externalReferenceId eq '${id}'`)
+                      .join(" or ");
+                    const url = `/sap/c4c/api/v1/premise-service/premise?$filter=${encodeURIComponent(filter)}`;
+                    const res = await fetch(url);
+                    const data = await res.json();
+                    return data.value || [];
+                  },
+                },
+                table: {
+                  display: {
+                    title: "Premises",
+                    cardLayout: {
+                      enabled: true,
+                      columns: 3,
+                    },
+                  },
+                  columns: ["externalReferenceId", "formattedAddress"],
+                  dataWorkbench: {
+                    refreshEnabled: false,
+                    exportEnabled: false,
+                  },
+                  pagination: {
+                    enabled: false,
+                  },
+                },
+                filterBar: {
+                  hideFilterBar: true,
+                },
+              },
+            },
+          ],
+        },
+      },
+      {
+        // Embedded external application via iframe content type.
+        key: "external",
+        title: "External App",
+        content: [{
+          type: "iframe",
+          iframe: { src: "https://wikipedia.org", title: "Wikipedia", height: "900px" },
+        }],
       },
     ],
 
