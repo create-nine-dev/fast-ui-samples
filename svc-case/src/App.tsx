@@ -544,6 +544,235 @@ function buildCaseDetail(c: any): SmartPageConfig {
           iframe: { src: "https://wikipedia.org", title: "Wikipedia", height: "900px" },
         }],
       },
+      {
+        // Customer notification preferences: one settings form per communication
+        // channel. Toggles inherit the channel default (BP/CA) and are persisted
+        // via the tab's submit action.
+        key: "accountPreference",
+        title: "Account Preferences",
+        submit: {
+          endpoint: "/api/settings",
+          method: "PATCH",
+          label: "Save Preferences",
+          placement: "top",
+        },
+        content: [
+          {
+            type: "form",
+            form: {
+              mode: "update",
+              hideActions: true,
+              sections: [
+                {
+                  title: "Email",
+                  description: "Email Preferences",
+                  variant: "settings",
+                  fields: [
+                    {
+                      key: "billingandInvoices",
+                      label: "Billing and Invoices",
+                      type: "toggle",
+                      icon: "mail",
+                      description: "Inherited from BP",
+                    },
+                    {
+                      key: "outageAlerts",
+                      label: "Outage Alerts (Override)",
+                      type: "toggle",
+                      icon: "mail",
+                      description: "Inherited from CA",
+                    },
+                    {
+                      key: "paymentReminders",
+                      label: "Payment Reminders",
+                      type: "toggle",
+                      icon: "mail",
+                      description: "Inherited from BP",
+                    },
+                    {
+                      key: "dunningNotices",
+                      label: "Dunning Notices",
+                      type: "toggle",
+                      icon: "mail",
+                      description: "Inherited from BP",
+                    },
+                    {
+                      key: "promotionalOffers",
+                      label: "Promotional Offers",
+                      type: "toggle",
+                      icon: "mail",
+                      description: "Inherited from BP",
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+          {
+            type: "form",
+            form: {
+              mode: "update",
+              hideActions: true,
+              sections: [
+                {
+                  title: "SMS / Text",
+                  description: "SMS and Text Message Preferences",
+                  variant: "settings",
+                  fields: [
+                    {
+                      key: "outageAlerts",
+                      label: "Outage Alerts",
+                      type: "toggle",
+                      icon: "mobile",
+                      description: "Inherited from BP",
+                    },
+                    {
+                      key: "paymentReminders",
+                      label: "Payment Reminders",
+                      type: "toggle",
+                      icon: "mail",
+                      description: "Inherited from BP",
+                    },
+                    {
+                      key: "billingandInvoices",
+                      label: "Billing and Invoices",
+                      type: "toggle",
+                      icon: "mail",
+                      description: "Inherited from BP",
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+          {
+            type: "form",
+            form: {
+              mode: "update",
+              hideActions: true,
+              sections: [
+                {
+                  title: "Paper / Post",
+                  description: "Paper and Post Message Preferences",
+                  variant: "settings",
+                  fields: [
+                    {
+                      key: "billingandInvoices",
+                      label: "Billing and Invoices",
+                      type: "toggle",
+                      icon: "mail",
+                      description: "Inherited from BP",
+                    },
+                    {
+                      key: "dunningNotices",
+                      label: "Dunning Notices",
+                      type: "toggle",
+                      icon: "mail",
+                      description: "Inherited from BP",
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+          {
+            type: "text",
+            fullWidth: true,
+            text: {
+              variant: "warning",
+              title:
+                "Notification Preferences",
+              content: `Notification preferences determine how customers receive service updates
+Preferences can be updated at any time through the customer portal`,
+            },
+          },
+        ],
+      },
+      {
+        // Full audit trail for this case. The change-history service stores
+        // several field-level changes in a single record, so each record's
+        // changeItems are flattened into one table row per field change.
+        key: "changeHistory",
+        title: "Change History",
+        content: [
+          {
+            type: "table",
+            table: {
+              dataSource: {
+                endpoint: "/sap/c4c/api/v1/change-history-service/changes",
+                fetcher: async (endpoint, top, skip) => {
+                  // Restrict the shared change-history service to this case's
+                  // service + object, then unpack every field change into a row.
+                  const filter = encodeURIComponent(
+                    "(service eq 'sap.crm.service.caseService') and (storageType eq 'HOT') " +
+                    `and (objectId eq '${c.id}')`,
+                  );
+                  const json = await get<any>(
+                    `${endpoint}?$filter=${filter}&$top=${top}&$skip=${skip}`,
+                  );
+                  const rows: any[] = [];
+                  for (const rec of json?.value ?? []) {
+                    for (const item of rec.changeItems ?? []) {
+                      rows.push({
+                        id: `${rec.id}-${item.path}-${item.element}`,
+                        changedDate: (rec.changeDateTime ?? "").slice(0, 10),
+                        changedOn: rec.changeDateTime,
+                        changedBy: rec.userDisplayName,
+                        modification: rec.modification,
+                        field: item.pathElementDisplayName,
+                        oldValue: item.oldDisplayValue ?? item.oldValue ?? "",
+                        newValue: item.newDisplayValue ?? item.newValue ?? "",
+                      });
+                    }
+                  }
+                  return rows;
+                },
+              },
+
+              entity: [
+                {
+                  key: "changedDate",
+                  label: "Changed On",
+                  type: "date"
+                },
+                { key: "changedOn", label: "Changed On", type: "date" },
+                { key: "changedBy", label: "Changed By", type: "text" },
+                {
+                  key: "modification",
+                  label: "Modification",
+                  type: "text"
+                },
+                { key: "field", label: "Field", type: "text" },
+                { key: "oldValue", label: "Old Value", type: "text" },
+                { key: "newValue", label: "New Value", type: "text" },
+              ],
+              table: {
+                display: {
+                  title: "Case Change History",
+                  showRecordCount: true,
+                },
+                grouping: {
+                  enabled: true,
+                  column: "changedDate",
+                  expanded: true,
+                  label: "{changedDate} {changedBy}",
+                },
+                columns: [
+                  "changedDate",
+                  "modification",
+                  "field",
+                  "oldValue",
+                  "newValue",
+                ],
+              },
+              filterBar: {
+                hideFilterBar: true,
+              },
+            },
+          },
+
+        ],
+      },
     ],
 
   };
